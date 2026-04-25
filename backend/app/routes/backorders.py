@@ -18,12 +18,12 @@ def current_user(x_user_name: Annotated[str | None, Header()] = None) -> str:
 
 @router.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "env": get_settings().env}
 
 
 @router.get("/debug/snowflake")
 def debug_snowflake(service: BackorderService = Depends(get_service)) -> dict:
-    if get_settings().app_environment.lower() not in {"development", "dev", "local", "test"}:
+    if not get_settings().is_local:
         raise HTTPException(status_code=404, detail="Debug endpoint is only available in development")
     return service.debug_snowflake()
 

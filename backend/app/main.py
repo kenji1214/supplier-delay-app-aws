@@ -25,6 +25,11 @@ app.add_middleware(
 )
 
 
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok", "env": settings.env}
+
+
 @app.on_event("startup")
 def startup() -> None:
     run_migrations()

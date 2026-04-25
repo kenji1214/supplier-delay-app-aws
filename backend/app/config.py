@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -7,7 +8,8 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 class Settings(BaseSettings):
     app_name: str = "Supplier Backorder Monitor"
-    app_environment: str = "development"
+    env: str = Field(default="local", validation_alias=AliasChoices("ENV", "APP_ENVIRONMENT"))
+    port: int = Field(default=8000, validation_alias="PORT")
     sqlite_path: str = "data/comments.db"
     cors_origins: str | None = "http://localhost:5173,http://127.0.0.1:5173"
     current_user: str = "poc.planner"
@@ -21,9 +23,18 @@ class Settings(BaseSettings):
     snowflake_schema: str | None = None
     snowflake_role: str | None = None
 
+    aws_region: str | None = None
+    aws_account_id: str | None = None
+    aws_ecr_repository: str | None = None
+    aws_apprunner_service_name: str | None = None
+
     frontend_dist: str = "../frontend/dist"
 
     model_config = SettingsConfigDict(env_file=BACKEND_DIR / ".env", env_file_encoding="utf-8", extra="ignore")
+
+    @property
+    def app_environment(self) -> str:
+        return self.env
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -43,10 +54,18 @@ class Settings(BaseSettings):
             "http://localhost:5174",
             "http://127.0.0.1:5174",
         ]
-        if self.app_environment.lower() in {"development", "dev", "local", "test"}:
+        if self.is_local:
             configured.extend(local_dev_origins)
 
         return sorted(set(configured))
+
+    @property
+    def is_local(self) -> bool:
+        return self.env.lower() == "local"
+
+    @property
+    def is_aws(self) -> bool:
+        return self.env.lower() == "aws"
 
     @property
     def can_use_snowflake(self) -> bool:

@@ -1,145 +1,160 @@
 # Supplier Backorder Monitor
 
-Practical POC for planners to monitor supplier backorders from Snowflake and manage action comments in SQLite.
+Single-container React + FastAPI app prepared for both localhost Docker execution and AWS container deployment.
 
-## Stack
+## Runtime behavior
 
-- Frontend: React, TypeScript, Vite
-- Backend: FastAPI, Python
-- Workflow data: SQLite with automatic lightweight migrations
-- Backorder data: Snowflake view `V_SUPPLIER_BACKORDER`, with mock fallback
-- Deployment: Docker-ready, including a root single-container Dockerfile suitable for AWS App Runner
+- `ENV=local` enables local-oriented behavior such as local CORS defaults and development-only debug access.
+- `ENV=aws` is the deployment mode for AWS containers.
+- The backend listens on `0.0.0.0` and reads the HTTP port from `PORT`.
+- Snowflake credentials are read from environment variables only.
+- AWS deployment settings are also read from environment variables.
+- Health endpoint: `GET /health`
 
-## Project Layout
+## Environment files
 
-```text
-backend/
-  app/
-    main.py
-    routes/
-    services/
-    repositories/
-    db/
-    snowflake/
-    models/
-    schemas/
-frontend/
-  src/
-    pages/
-    components/
-    api/
-    types/
-Dockerfile
-docker-compose.yml
-README.md
-```
+- Local Docker defaults: [.env.local](/Users/Project/supplier-delay-app-ver1/.env.local)
+- AWS example template: [.env.aws.example](/Users/Project/supplier-delay-app-ver1/.env.aws.example)
 
-## Local Backend
+Do not put real secrets in the repo. For AWS, create your own runtime environment from `.env.aws.example` and supply the real values through App Runner or another secret source.
+
+## Local run
+
+Run the backend directly:
 
 ```bash
 cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
-uvicorn app.main:app --reload --port 8000
+ENV=local PORT=8000 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-SQLite is created automatically at `data/comments.db`. On startup, the backend checks `PRAGMA table_info(comments)` and applies `ALTER TABLE` for missing columns, including `planner_code`.
+## Docker build
 
-For local Vite development, CORS keeps explicit allowed origins for `localhost` and `127.0.0.1` on ports `5173` and `5174`. This avoids browser preflight failures when Vite moves to the next port while still avoiding `*` with credentialed requests.
-
-## Local Frontend
+Build the production image from the repo root:
 
 ```bash
-cd frontend
-npm install
-npm run dev
+docker build -t supplier-delay-app .
 ```
 
-Open `http://localhost:5173`. Vite proxies `/api` to `http://localhost:8000`.
+## Docker run
 
-## Mock Data Mode
-
-The backend defaults to mock data:
-
-```env
-USE_MOCK_DATA=true
-```
-
-Set `USE_MOCK_DATA=false` and provide Snowflake variables to read from `V_SUPPLIER_BACKORDER`.
-
-## Snowflake Environment
-
-```env
-SNOWFLAKE_ACCOUNT=
-SNOWFLAKE_USER=
-SNOWFLAKE_PASSWORD=
-SNOWFLAKE_WAREHOUSE=
-SNOWFLAKE_DATABASE=
-SNOWFLAKE_SCHEMA=
-SNOWFLAKE_ROLE=
-```
-
-Snowflake is read-only. Comments and action tracking are stored only in SQLite.
-
-## API
-
-- `GET /api/backorders`
-- `GET /api/backorders/{shipment_key}`
-- `GET /api/backorders/{shipment_key}/comments`
-- `POST /api/backorders/{shipment_key}/comments`
-- `PUT /api/comments/{comment_id}`
-- `DELETE /api/comments/{comment_id}`
-- `GET /api/planner-codes`
-
-`shipment_key` is always:
-
-```text
-supplier_code|plant_code|part_number|po_number
-```
-
-Planner filtering supports `planner_code`, repeated `planner_codes`, and comma-separated planner codes.
-
-## Comment Ordering
-
-Comments are returned and rendered in this order:
-
-```sql
-ORDER BY created_at DESC, id DESC
-```
-
-Edits update the existing row in place and do not move older comments to the top.
-
-## UX Flows
-
-- Add comment: save, then navigate back to the list page.
-- Edit comment: save, stay on detail page, refresh detail data.
-- Delete comment: soft delete by setting `is_deleted = 1`.
-
-## Docker
-
-Single-container build for App Runner style deployment:
+Run locally with the provided local environment file:
 
 ```bash
-docker build -t supplier-backorder-monitor .
-docker run --rm -p 8000:8000 -e USE_MOCK_DATA=true supplier-backorder-monitor
+docker run --rm \
+  --env-file .env.local \
+  -p 8000:8000 \
+  supplier-delay-app
 ```
 
-Open `http://localhost:8000`.
+Open `http://localhost:8000` and check `http://localhost:8000/health`.
 
-Local two-service compose:
+## ECR push
+
+Set the AWS values first:
 
 ```bash
-docker compose up --build
+export AWS_REGION=us-east-1
+export AWS_ACCOUNT_ID=123456789012
+export AWS_ECR_REPOSITORY=supplier-delay-app
 ```
 
-## AWS App Runner Notes
+Create the repository if needed:
 
-Use the root `Dockerfile` for the simplest deployment. Configure these environment variables in App Runner:
+```bash
+aws ecr create-repository --repository-name "$AWS_ECR_REPOSITORY" --region "$AWS_REGION"
+```
 
-- `USE_MOCK_DATA=false`
-- `SQLITE_PATH=/app/data/comments.db`
-- Snowflake connection variables listed above
+Authenticate Docker to ECR:
 
-For a POC, SQLite lives inside the container filesystem. For durable production workflow data, move comments to a managed database or DynamoDB.
+```bash
+aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+```
+
+Tag and push:
+
+```bash
+docker tag supplier-delay-app:latest "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$AWS_ECR_REPOSITORY:latest"
+docker push "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$AWS_ECR_REPOSITORY:latest"
+```
+
+## App Runner deployment
+
+Set the AWS deployment variables:
+
+```bash
+export AWS_REGION=us-east-1
+export AWS_ACCOUNT_ID=123456789012
+export AWS_ECR_REPOSITORY=supplier-delay-app
+export AWS_APPRUNNER_SERVICE_NAME=supplier-delay-app
+```
+
+Create the service from the pushed image:
+
+```bash
+aws apprunner create-service \
+  --region "$AWS_REGION" \
+  --service-name "$AWS_APPRUNNER_SERVICE_NAME" \
+  --source-configuration '{
+    "AuthenticationConfiguration": {
+      "AccessRoleArn": "arn:aws:iam::'"$AWS_ACCOUNT_ID"':role/AppRunnerECRAccessRole"
+    },
+    "AutoDeploymentsEnabled": true,
+    "ImageRepository": {
+      "ImageIdentifier": "'"$AWS_ACCOUNT_ID"'.dkr.ecr.'"$AWS_REGION"'.amazonaws.com/'"$AWS_ECR_REPOSITORY"':latest",
+      "ImageRepositoryType": "ECR",
+      "ImageConfiguration": {
+        "Port": "8000",
+        "RuntimeEnvironmentVariables": {
+          "ENV": "aws",
+          "PORT": "8000",
+          "USE_MOCK_DATA": "false",
+          "SQLITE_PATH": "/app/data/comments.db",
+          "SNOWFLAKE_ACCOUNT": "",
+          "SNOWFLAKE_USER": "",
+          "SNOWFLAKE_PASSWORD": "",
+          "SNOWFLAKE_WAREHOUSE": "",
+          "SNOWFLAKE_DATABASE": "",
+          "SNOWFLAKE_SCHEMA": "",
+          "SNOWFLAKE_ROLE": "",
+          "AWS_REGION": "'"$AWS_REGION"'",
+          "AWS_ACCOUNT_ID": "'"$AWS_ACCOUNT_ID"'",
+          "AWS_ECR_REPOSITORY": "'"$AWS_ECR_REPOSITORY"'",
+          "AWS_APPRUNNER_SERVICE_NAME": "'"$AWS_APPRUNNER_SERVICE_NAME"'"
+        }
+      }
+    }
+  }'
+```
+
+In production, move secrets such as `SNOWFLAKE_PASSWORD` into AWS Secrets Manager or App Runner secret references instead of plain environment variables.
+
+## Required environment variables
+
+Application:
+
+- `ENV=local|aws`
+- `PORT`
+- `SQLITE_PATH`
+- `USE_MOCK_DATA`
+- `CURRENT_USER`
+- `CORS_ORIGINS`
+
+Snowflake:
+
+- `SNOWFLAKE_ACCOUNT`
+- `SNOWFLAKE_USER`
+- `SNOWFLAKE_PASSWORD`
+- `SNOWFLAKE_WAREHOUSE`
+- `SNOWFLAKE_DATABASE`
+- `SNOWFLAKE_SCHEMA`
+- `SNOWFLAKE_ROLE`
+
+AWS deployment metadata:
+
+- `AWS_REGION`
+- `AWS_ACCOUNT_ID`
+- `AWS_ECR_REPOSITORY`
+- `AWS_APPRUNNER_SERVICE_NAME`

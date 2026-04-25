@@ -7,4 +7,5 @@ node_modules/
 dist/
 data/
 .env
+.env.local
 *.db

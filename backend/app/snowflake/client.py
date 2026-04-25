@@ -184,7 +184,7 @@ class SnowflakeBackorderClient:
         logger.info("Snowflake connection start account=%s database=%s schema=%s warehouse=%s",
                     self.settings.snowflake_account, self.settings.snowflake_database,
                     self.settings.snowflake_schema, self.settings.snowflake_warehouse)
-        if self.settings.app_environment.lower() in {"development", "dev", "local", "test"}:
+        if self.settings.is_local:
             logger.info("Snowflake query: %s params=%s", " ".join(sql.split()), params)
         with snowflake.connector.connect(**self._connection_kwargs()) as conn:
             logger.info("Snowflake connection success")
